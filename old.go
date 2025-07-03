@@ -15,7 +15,6 @@ import (
 	"regexp"
 	"strings"
 	"encoding/json"
-	"sync"
 	"time"
 )
 
@@ -278,12 +277,6 @@ func getBlocksSubModel() (map[string]string, error) {
 	return blocks, nil
 }
 
-// WriteTask is used to send output path and data to writing goroutines
-type WriteTask struct {
-	Path string
-	Data []byte
-}
-
 func main() {
 	start := time.Now()
 	// Проверяем наличие необходимых директорий
@@ -309,126 +302,65 @@ func main() {
 		return
 	}
 
-	// Обрабатываем все страницы параллельно
+	// Обрабатываем все страницы
+	var models []*Model
+
 	pageDirs, err := ioutil.ReadDir("content")
 	if err != nil {
 		fmt.Printf(msgErrorReadingContent, err)
 		return
 	}
 
-	// Prepare list of page paths
-	pages := make([]string, 0)
 	for _, pageDir := range pageDirs {
 		if pageDir.IsDir() {
-			pages = append(pages, filepath.Join("content", pageDir.Name()))
-		}
-	}
-
-	chModels := make(chan string, 10)
-	chWriting := make(chan WriteTask, 10)
-	chCollectedModels := make(chan *Model, len(pages))
-
-	var wgReaders sync.WaitGroup
-	var wgProcessors sync.WaitGroup
-	var wgWriters sync.WaitGroup
-
-	numReaders := 2
-	numProcessors := 4
-	numWriters := 2
-
-	// Feed page paths to chModels in parallel
-	pagesCh := make(chan string, len(pages))
-	for _, p := range pages {
-		pagesCh <- p
-	}
-	close(pagesCh)
-
-	for i := 0; i < numReaders; i++ {
-		wgReaders.Add(1)
-		go func() {
-			defer wgReaders.Done()
-			for pagePath := range pagesCh {
-				chModels <- pagePath
+			pagePath := filepath.Join("content", pageDir.Name())
+			model, err := processPage(pagePath, blocks)
+			if err != nil {
+				fmt.Printf(msgErrorProcessingPage, pageDir.Name(), err)
+				continue
 			}
-		}()
-	}
-
-	// Processors: read from chModels, process, send to chWriting, collect models
-	for i := 0; i < numProcessors; i++ {
-		wgProcessors.Add(1)
-		go func() {
-			defer wgProcessors.Done()
-			for pagePath := range chModels {
-				model, err := processPage(pagePath, blocks)
-				if err != nil {
-					fmt.Printf(msgErrorProcessingPage, filepath.Base(pagePath), err)
-					continue
-				}
-				if model.Template == "" {
-					fmt.Printf(msgWarningNoTemplate, model.ID)
-					continue
-				}
-				templateContent, templateVars, err := loadTemplate(model.Template)
-				if err != nil {
-					fmt.Printf(msgErrorLoadingTemplate, model.ID, err)
-					continue
-				}
-				for k, v := range templateVars {
-					if _, exists := model.Data[k]; !exists {
-						model.Data[k] = v
-					}
-				}
-				output, err := renderTemplate(templateContent, model)
-				if err != nil {
-					fmt.Printf(msgErrorRendering, model.ID, err)
-					continue
-				}
-				outputPath := filepath.Join("build", model.ID+".html")
-				chWriting <- WriteTask{Path: outputPath, Data: []byte(output)}
-				chCollectedModels <- model
-			}
-		}()
-	}
-
-	// Writers: write files from chWriting
-	for i := 0; i < numWriters; i++ {
-		wgWriters.Add(1)
-		go func() {
-			defer wgWriters.Done()
-			for task := range chWriting {
-				err := ioutil.WriteFile(task.Path, task.Data, 0644)
-				if err != nil {
-					fmt.Printf(msgErrorWritingOutput, task.Path, err)
-					continue
-				}
-				/*
-				fmt.Printf(msgGenerated, task.Path)
-				*/
-			}
-		}()
-	}
-
-	// Wait for all readers to finish, then close chModels
-	wgReaders.Wait()
-	close(chModels)
-	// Wait for all processors to finish, then close chWriting
-	wgProcessors.Wait()
-	close(chWriting)
-
-	// Collect all models from chCollectedModels
-	var models []*Model
-	for i := 0; i < len(pages); i++ {
-		model := <-chCollectedModels
-		if model != nil {
 			models = append(models, model)
 		}
 	}
-	close(chCollectedModels)
 
-	// Wait for all writers to finish
-	wgWriters.Wait()
+	// Обрабатываем каждую модель и генерируем вывод
+	for _, model := range models {
+		if model.Template == "" {
+			fmt.Printf(msgWarningNoTemplate, model.ID)
+			continue
+		}
 
-	// Generate category files (single-threaded, as before)
+		templateContent, templateVars, err := loadTemplate(model.Template)
+		if err != nil {
+			fmt.Printf(msgErrorLoadingTemplate, model.ID, err)
+			continue
+		}
+
+		// Объединяем переменные шаблона с данными модели (переменные шаблона имеют пустые значения по умолчанию)
+		for k, v := range templateVars {
+			if _, exists := model.Data[k]; !exists {
+				model.Data[k] = v
+			}
+		}
+
+		output, err := renderTemplate(templateContent, model)
+		if err != nil {
+			fmt.Printf(msgErrorRendering, model.ID, err)
+			continue
+		}
+
+		outputPath := filepath.Join("build", model.ID+".html")
+		err = ioutil.WriteFile(outputPath, []byte(output), 0644)
+		if err != nil {
+			fmt.Printf(msgErrorWritingOutput, model.ID, err)
+			continue
+		}
+		/*
+		fmt.Printf(msgGenerated, outputPath)
+		*/
+	}
+
+	// Generate category files
 	if err := generateCategoryFiles(models, blocks); err != nil {
 		fmt.Printf("Ошибка при генерации файлов категорий: %v\n", err)
 	}
