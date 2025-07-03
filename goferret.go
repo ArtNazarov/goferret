@@ -72,7 +72,13 @@ func loadTemplate(templateName string) (string, map[string]string, error) {
 }
 
 // processPage обрабатывает директорию одной страницы и возвращает Model
-func processPage(pagePath string) (*Model, error) {
+func processPage(pagePath string, blocks map[string]string) (*Model, error) {
+	// Print blocks hashmap to the terminal
+	fmt.Println("Blocks hashmap in processPage:")
+	for k, v := range blocks {
+		fmt.Printf("  %s: %s\n", k, v)
+	}
+
 	pageID := filepath.Base(pagePath)
 	model := &Model{
 		ID:   pageID,
@@ -115,6 +121,18 @@ func processPage(pagePath string) (*Model, error) {
 			model.Data[attrName] = strings.TrimSpace(string(content))
 		}
 	}
+
+	// Инициализируем атрибуты модели значениями из blocks
+	for k, v := range blocks {
+		model.Data[k] = v
+	}
+
+	// Print model key and values to the terminal
+	fmt.Printf("Model: %s\n", model.ID)
+	for k, v := range model.Data {
+		fmt.Printf("  %s: %s\n", k, v)
+	}
+	fmt.Println("---")
 
 	return model, nil
 }
@@ -269,6 +287,60 @@ func generateCategoryFiles(models []*Model) error {
 	return nil
 }
 
+// getBlocksSubModel reads all .tpl files from ./blocks, stores their contents in a Blocks map,
+// and substitutes {blockname} for other blocks using strings.Replace (no recursion, no self-reference).
+func getBlocksSubModel() (map[string]string, error) {
+	blocksDir := "blocks"
+	blocks := make(map[string]string)
+	blockOrder := make([]string, 0)
+
+	// Read all .tpl files in blocksDir
+	dirEntries, err := os.ReadDir(blocksDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range dirEntries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasSuffix(name, ".tpl") {
+			fmt.Printf("Processing block: %s\n", name);
+			blockName := strings.TrimSuffix(name, ".tpl")
+			content, err := os.ReadFile(filepath.Join(blocksDir, name))
+			if err != nil {
+				return nil, err
+			}
+			blocks[blockName] = string(content)
+			blockOrder = append(blockOrder, blockName)
+		}
+	}
+
+	// Check for self-references
+	for blockName, content := range blocks {
+		if strings.Contains(content, "{"+blockName+"}") {
+			return nil, fmt.Errorf("block '%s' contains a forbidden self-reference", blockName)
+		}
+	}
+
+	/*
+	// Substitute {blockname} for other blocks using strings.Replace
+	for _, blockName := range blockOrder {
+		for _, otherName := range blockOrder {
+			if blockName == otherName {
+				continue
+			}
+			blocks[blockName] = strings.ReplaceAll(blocks[blockName], "{"+otherName+"}", blocks[otherName])
+		}
+	}
+	*/
+	// Print all block names and their values to the terminal
+	for k, v := range blocks {
+		fmt.Printf("Block: %s\nValue:\n%s\n---\n", k, v)
+	}
+	return blocks, nil
+}
+
 func main() {
 	// Проверяем наличие необходимых директорий
 	if _, err := os.Stat("templates"); os.IsNotExist(err) {
@@ -286,6 +358,13 @@ func main() {
 		os.Mkdir("build", 0755)
 	}
 
+	// Получаем блоки
+	blocks, err := getBlocksSubModel()
+	if err != nil {
+		fmt.Printf("Ошибка при обработке блоков: %v\n", err)
+		return
+	}
+
 	// Обрабатываем все страницы
 	var models []*Model
 
@@ -298,7 +377,7 @@ func main() {
 	for _, pageDir := range pageDirs {
 		if pageDir.IsDir() {
 			pagePath := filepath.Join("content", pageDir.Name())
-			model, err := processPage(pagePath)
+			model, err := processPage(pagePath, blocks)
 			if err != nil {
 				fmt.Printf(msgErrorProcessingPage, pageDir.Name(), err)
 				continue

@@ -1,0 +1,1 @@
+<h1>Header of the site</h1>

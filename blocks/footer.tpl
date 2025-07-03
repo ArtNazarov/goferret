@@ -1,0 +1,1 @@
+<h6>Footer of the site</h6>
