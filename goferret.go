@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"encoding/json"
 )
 
 // Сообщения для пользователя
@@ -32,6 +33,7 @@ const (
 	msgErrorReadingSetting  = "Ошибка при чтении файла template.setting для %s: %v"
 	msgErrorReadingPageDir  = "Ошибка при чтении директории страницы %s: %v"
 	msgErrorReadingAttr     = "Ошибка при чтении атрибута %s для страницы %s: %v"
+	msgErrorReadingCategory = "Ошибка при чтении категории для страницы %s: %v"
 )
 
 // Model представляет страницу с её атрибутами и шаблоном
@@ -39,6 +41,7 @@ type Model struct {
 	ID       string
 	Data     map[string]string
 	Template string
+	Category string
 }
 
 // parseTemplateVars извлекает все переменные шаблона из файла шаблона
@@ -74,6 +77,16 @@ func processPage(pagePath string) (*Model, error) {
 	model := &Model{
 		ID:   pageID,
 		Data: make(map[string]string),
+	}
+
+	// Read category.val if exists
+	categoryPath := filepath.Join(pagePath, "category.val")
+	if _, err := os.Stat(categoryPath); err == nil {
+		category, err := ioutil.ReadFile(categoryPath)
+		if err != nil {
+			return nil, fmt.Errorf(msgErrorReadingCategory, pageID, err)
+		}
+		model.Category = strings.TrimSpace(string(category))
 	}
 
 	// Чтение template.setting
@@ -117,6 +130,143 @@ func renderTemplate(templateStr string, model *Model) (string, error) {
 		return match // Возвращаем оригинал, если не найдено
 	})
 	return result, nil
+}
+
+// Add new function to generate category files
+func generateCategoryFiles(models []*Model) error {
+	// Group models by category
+	categories := make(map[string][]map[string]string)
+	for _, model := range models {
+		if model.Category == "" {
+			continue
+		}
+
+		if _, exists := categories[model.Category]; !exists {
+			categories[model.Category] = make([]map[string]string, 0)
+		}
+
+		// Create simplified model for JSON
+		item := map[string]string{
+			"title": model.Data["title"], // Assuming each model has a title
+			"url":   fmt.Sprintf("/%s.html", model.ID),
+		}
+		categories[model.Category] = append(categories[model.Category], item)
+	}
+
+	// Create build directory if not exists
+	if _, err := os.Stat("build"); os.IsNotExist(err) {
+		os.Mkdir("build", 0755)
+	}
+
+	// Generate JSON files per category
+	for category, items := range categories {
+		jsonData, err := json.MarshalIndent(items, "", "  ")
+		if err != nil {
+			return fmt.Errorf("ошибка при маршалинге JSON для категории %s: %v", category, err)
+		}
+		jsonPath := filepath.Join("build", fmt.Sprintf("%s.json", category))
+		if err := ioutil.WriteFile(jsonPath, jsonData, 0644); err != nil {
+			return fmt.Errorf("ошибка при записи JSON файла для категории %s: %v", category, err)
+		}
+		fmt.Printf("Сгенерировано: %s\n", jsonPath)
+
+		// Generate HTML file
+	htmlContent := `<!DOCTYPE html>
+	<html lang="ru">
+	<head>
+		<meta charset="UTF-8">
+		<title>Категории</title>
+		<style>
+			table { border-collapse: collapse; width: 100%; }
+			th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+			.category { margin-bottom: 20px; }
+			h2 { margin-top: 30px; }
+			.pagination { margin: 20px 0; text-align: center; }
+			.pagination button { margin: 0 2px; padding: 5px 10px; }
+		</style>
+		<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+	</head>
+	<body>
+		<h1>Категории</h1>
+		<div id="categoriesContainer"></div>
+		<div class="pagination" id="pagination"></div>
+
+		<script>
+			const category = "{{CATEGORY}}";
+			const url = window.location.protocol + '//' + window.location.host + '/' + category + '.json';
+			const ROWS_PER_PAGE = 10;
+			let currentPage = 1;
+			let data = [];
+
+			function renderTable(page) {
+				const container = $('#categoriesContainer');
+				container.empty();
+				const start = (page - 1) * ROWS_PER_PAGE;
+				const end = start + ROWS_PER_PAGE;
+				const pageData = data.slice(start, end);
+
+				const categoryDiv = $('<div>').addClass('category');
+				const header = $('<h2>').text(category);
+				categoryDiv.append(header);
+
+				const table = $('<table>');
+				const thead = $('<thead>').html('<tr><th>Заголовок</th><th>Ссылка</th></tr>');
+				table.append(thead);
+				const tbody = $('<tbody>');
+				pageData.forEach(function(item) {
+					const row = $('<tr>');
+					row.html('<td>' + item.title + '</td><td><a href="' + item.url + '">' + item.url + '</a></td>');
+					tbody.append(row);
+				});
+				table.append(tbody);
+				categoryDiv.append(table);
+				container.append(categoryDiv);
+			}
+
+			function renderPagination() {
+				const totalPages = Math.ceil(data.length / ROWS_PER_PAGE);
+				const pagination = $('#pagination');
+				pagination.empty();
+				if (totalPages <= 1) return;
+				for (let i = 1; i <= totalPages; i++) {
+					const btn = $('<button>').text(i);
+					if (i === currentPage) btn.attr('disabled', true);
+					btn.on('click', function() {
+						currentPage = i;
+						renderTable(currentPage);
+						renderPagination();
+					});
+					pagination.append(btn);
+				}
+			}
+
+			$(document).ready(function() {
+				$.getJSON(url, function(json) {
+					data = json;
+					currentPage = 1;
+					renderTable(currentPage);
+					renderPagination();
+				}).fail(function() {
+					$('#categoriesContainer').html('<p>Ошибка загрузки данных категорий</p>');
+				});
+			});
+		</script>
+	</body>
+	</html>`
+	
+		htmlContent = strings.ReplaceAll(htmlContent, "{{CATEGORY}}", category)
+
+		htmlPath := filepath.Join("build", category+".html")
+		if err := ioutil.WriteFile(htmlPath, []byte(htmlContent), 0644); err != nil {
+			return fmt.Errorf("ошибка при записи HTML файла: %v", err)
+		}
+		fmt.Printf("Сгенерировано: %s\n", htmlPath)
+	}
+
+	
+
+	
+	return nil
 }
 
 func main() {
@@ -191,6 +341,11 @@ func main() {
 		}
 
 		fmt.Printf(msgGenerated, outputPath)
+	}
+
+	// Generate category files
+	if err := generateCategoryFiles(models); err != nil {
+		fmt.Printf("Ошибка при генерации файлов категорий: %v\n", err)
 	}
 
 	fmt.Println(msgSiteGenerationDone)
