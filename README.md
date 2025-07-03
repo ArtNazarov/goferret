@@ -1,6 +1,6 @@
 # goferret
 
-[Logo](https://dl.dropbox.com/scl/fi/jfhjfas6zuwsj460h7j9p/goferret.png?rlkey=ulydm3q3dt0rygv8wjp09xgfy&st=ng7zs85b)
+![Logo](https://dl.dropbox.com/scl/fi/jfhjfas6zuwsj460h7j9p/goferret.png?rlkey=ulydm3q3dt0rygv8wjp09xgfy&st=ng7zs85b)
 
 **goferret** — это генератор статических сайтов, написанный на Go, который позволяет создавать HTML-страницы на основе шаблонов и атрибутов, определённых в отдельных файлах. Проект предназначен для быстрой генерации простых сайтов с использованием минималистичной структуры данных и шаблонов.
 
