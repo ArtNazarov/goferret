@@ -155,6 +155,47 @@ func renderTemplate(templateStr string, model *Model) (string, error) {
 }
 
 // Add new function to generate category files
+type CategoryTask struct {
+	Category string
+	Items    []map[string]string
+}
+
+// processCategory handles the generation of JSON and HTML files for a single category
+func processCategory(task CategoryTask, blocks map[string]string) error {
+	// Generate JSON file
+	jsonData, err := json.MarshalIndent(task.Items, "", "  ")
+	if err != nil {
+		return fmt.Errorf("ошибка при маршалинге JSON для категории %s: %v", task.Category, err)
+	}
+	jsonPath := filepath.Join("build", fmt.Sprintf("%s.json", task.Category))
+	if err := ioutil.WriteFile(jsonPath, jsonData, 0644); err != nil {
+		return fmt.Errorf("ошибка при записи JSON файла для категории %s: %v", task.Category, err)
+	}
+
+	// Generate HTML file
+	htmlTplPath := filepath.Join("collections", "category.tpl")
+	htmlBytes, err := ioutil.ReadFile(htmlTplPath)
+	if err != nil {
+		return fmt.Errorf("ошибка при чтении шаблона категории: %v", err)
+	}
+	htmlContent := string(htmlBytes)
+
+	htmlContent = strings.ReplaceAll(htmlContent, "{{CATEGORY}}", task.Category)
+
+	// Replace {key} with blocks[key] for all keys in blocks
+	for k, v := range blocks {
+		htmlContent = strings.ReplaceAll(htmlContent, "{"+k+"}", v)
+	}
+
+	htmlPath := filepath.Join("build", task.Category+".html")
+	if err := ioutil.WriteFile(htmlPath, []byte(htmlContent), 0644); err != nil {
+		return fmt.Errorf("ошибка при записи HTML файла: %v", err)
+	}
+
+	return nil
+}
+
+// generateCategoryFiles now processes categories in parallel using a worker pool
 func generateCategoryFiles(models []*Model, blocks map[string]string) error {
 	// Group models by category
 	categories := make(map[string][]map[string]string)
@@ -167,9 +208,8 @@ func generateCategoryFiles(models []*Model, blocks map[string]string) error {
 			categories[model.Category] = make([]map[string]string, 0)
 		}
 
-		// Create simplified model for JSON
 		item := map[string]string{
-			"title": model.Data["title"], // Assuming each model has a title
+			"title": model.Data["title"],
 			"url":   fmt.Sprintf("/%s.html", model.ID),
 		}
 		categories[model.Category] = append(categories[model.Category], item)
@@ -180,41 +220,35 @@ func generateCategoryFiles(models []*Model, blocks map[string]string) error {
 		os.Mkdir("build", 0755)
 	}
 
-	// Generate JSON files per category
+	chTasks := make(chan CategoryTask, len(categories))
+	chErrors := make(chan error, len(categories))
+	var wg sync.WaitGroup
+
+	numWorkers := 4 // Adjust as needed
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for task := range chTasks {
+				if err := processCategory(task, blocks); err != nil {
+					chErrors <- err
+				}
+			}
+		}()
+	}
+
 	for category, items := range categories {
-		jsonData, err := json.MarshalIndent(items, "", "  ")
+		chTasks <- CategoryTask{Category: category, Items: items}
+	}
+	close(chTasks)
+
+	wg.Wait()
+	close(chErrors)
+
+	for err := range chErrors {
 		if err != nil {
-			return fmt.Errorf("ошибка при маршалинге JSON для категории %s: %v", category, err)
+			return err
 		}
-		jsonPath := filepath.Join("build", fmt.Sprintf("%s.json", category))
-		if err := ioutil.WriteFile(jsonPath, jsonData, 0644); err != nil {
-			return fmt.Errorf("ошибка при записи JSON файла для категории %s: %v", category, err)
-		}
-		/*
-		fmt.Printf("Сгенерировано: %s\n", jsonPath)
-		*/
-		// Generate HTML file
-		htmlTplPath := filepath.Join("collections", "category.tpl")
-		htmlBytes, err := ioutil.ReadFile(htmlTplPath)
-		if err != nil {
-			return fmt.Errorf("ошибка при чтении шаблона категории: %v", err)
-		}
-		htmlContent := string(htmlBytes)
-
-		htmlContent = strings.ReplaceAll(htmlContent, "{{CATEGORY}}", category)
-
-		// Replace {key} with blocks[key] for all keys in blocks
-		for k, v := range blocks {
-			htmlContent = strings.ReplaceAll(htmlContent, "{"+k+"}", v)
-		}
-
-		htmlPath := filepath.Join("build", category+".html")
-		if err := ioutil.WriteFile(htmlPath, []byte(htmlContent), 0644); err != nil {
-			return fmt.Errorf("ошибка при записи HTML файла: %v", err)
-		}
-		/*
-		fmt.Printf("Сгенерировано: %s\n", htmlPath)
-		*/
 	}
 
 	return nil
