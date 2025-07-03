@@ -151,7 +151,7 @@ func renderTemplate(templateStr string, model *Model) (string, error) {
 }
 
 // Add new function to generate category files
-func generateCategoryFiles(models []*Model) error {
+func generateCategoryFiles(models []*Model, blocks map[string]string) error {
 	// Group models by category
 	categories := make(map[string][]map[string]string)
 	for _, model := range models {
@@ -197,6 +197,11 @@ func generateCategoryFiles(models []*Model) error {
 		htmlContent := string(htmlBytes)
 
 		htmlContent = strings.ReplaceAll(htmlContent, "{{CATEGORY}}", category)
+
+		// Replace {key} with blocks[key] for all keys in blocks
+		for k, v := range blocks {
+			htmlContent = strings.ReplaceAll(htmlContent, "{"+k+"}", v)
+		}
 
 		htmlPath := filepath.Join("build", category+".html")
 		if err := ioutil.WriteFile(htmlPath, []byte(htmlContent), 0644); err != nil {
@@ -344,7 +349,7 @@ func main() {
 	}
 
 	// Generate category files
-	if err := generateCategoryFiles(models); err != nil {
+	if err := generateCategoryFiles(models, blocks); err != nil {
 		fmt.Printf("Ошибка при генерации файлов категорий: %v\n", err)
 	}
 
