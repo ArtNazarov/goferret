@@ -366,9 +366,9 @@ func main() {
 	var wgProcessors sync.WaitGroup
 	var wgWriters sync.WaitGroup
 
-	numReaders := 2
-	numProcessors := 4
-	numWriters := 2
+	numReaders := 200
+	numProcessors := 2
+	numWriters := 200
 
 	// Feed page paths to chModels in parallel
 	pagesCh := make(chan string, len(pages))
